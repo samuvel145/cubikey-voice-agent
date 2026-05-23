@@ -1,10 +1,13 @@
+# setuptools 82+ drops pkg_resources; webrtcvad still imports it
+setuptools>=65,<82
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 websockets>=12.0
-deepgram-sdk>=3.0.0
-groq>=0.9.0
+azure-cognitiveservices-speech>=1.38.0
+openai>=1.0.0
 cartesia>=1.0.0
 webrtcvad>=2.0.10
+numpy>=1.24.0
 python-dotenv>=1.0.0
 httpx>=0.27.0
 pydantic>=2.0.0

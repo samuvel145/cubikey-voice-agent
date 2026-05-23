@@ -7,7 +7,7 @@ from config import settings
 
 if __name__ == "__main__":
     print(
-        f"🎙️  Voice Agent starting on "
+        f"Voice Agent starting on "
         f"ws://{settings.HOST}:{settings.PORT}/ws/voice"
     )
     uvicorn.run(

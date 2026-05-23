@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from session.session_manager import session_manager
+from app.metrics import increment_connections, get_total_connections  # noqa: F401 (re-exported)
 
 # ── Logging ───────────────────────────────────────────────────
 logging.basicConfig(
@@ -17,30 +18,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Connection metrics ────────────────────────────────────────
-_total_connections: int = 0
-
-
-def increment_connections() -> None:
-    global _total_connections
-    _total_connections += 1
-
-
-def get_total_connections() -> int:
-    return _total_connections
-
 
 # ── App lifespan ──────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ─ Startup ─
-    logger.info("🎙️  Voice Agent server starting...")
+    logger.info("Voice Agent server starting...")
 
     missing = []
-    if not settings.DEEPGRAM_API_KEY:
-        missing.append("DEEPGRAM_API_KEY")
-    if not settings.GROQ_API_KEY:
-        missing.append("GROQ_API_KEY")
+    if not settings.AZURE_SPEECH_KEY:
+        missing.append("AZURE_SPEECH_KEY")
+    if not settings.AZURE_OPENAI_API_KEY:
+        missing.append("AZURE_OPENAI_API_KEY")
     if not settings.CARTESIA_API_KEY:
         missing.append("CARTESIA_API_KEY")
     if missing:
@@ -159,7 +148,16 @@ async def root_ui():
                         } else if (msg.type === 'transcript') {
                             status.innerText = `You said: "${msg.text}"`;
                         } else if (msg.type === 'interrupt') {
-                            status.innerText = "Interrupting agent...";
+                            status.innerText = "Listening...";
+                            // Flush any buffered agent audio still scheduled to play.
+                            // Closing and recreating the AudioContext is the only reliable
+                            // way to stop Web Audio API's internal playback queue immediately.
+                            if (audioContext) {
+                                const old = audioContext;
+                                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                                nextPlayTime = 0;
+                                old.close().catch(() => {});
+                            }
                         }
                     } else if (event.data instanceof ArrayBuffer) {
                         status.innerText = "Agent is speaking...";

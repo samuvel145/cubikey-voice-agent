@@ -5,6 +5,15 @@ import sys
 import time
 import httpx
 
+async def server_already_up(url="http://127.0.0.1:8000/health") -> bool:
+    """True if something healthy is already listening (avoid duplicate bind on same port)."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url)
+            return response.status_code == 200
+    except Exception:
+        return False
+
 def start_server():
     """Start the FastAPI server in the background."""
     print("----------------------------------------")
@@ -44,13 +53,14 @@ def run_client():
 if __name__ == "__main__":
     server = None
     try:
-        # 1. Start Server
-        server = start_server()
-        
-        # 2. Wait for it to boot
-        if not asyncio.run(wait_for_server()):
-            print("❌ Server failed to start within timeout.")
-            sys.exit(1)
+        # 1. Start server only if nothing is already listening on :8000
+        if asyncio.run(server_already_up()):
+            print("✅ Backend already running — skipping duplicate server start.")
+        else:
+            server = start_server()
+            if not asyncio.run(wait_for_server()):
+                print("❌ Server failed to start within timeout.")
+                sys.exit(1)
         
         # 3. Start Client (this is blocking)
         run_client()
