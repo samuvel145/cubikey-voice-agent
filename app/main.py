@@ -73,11 +73,13 @@ async def health_check():
     }
 
 
-# ── Include WebSocket router ────────────────────────────────
-from app.websocket_handler import router  # noqa: E402
+# ── Include routers ──────────────────────────────────────────
+from app.websocket_handler import router          # noqa: E402
+from app.twilio_handler import router as twilio_router  # noqa: E402
 from fastapi.responses import HTMLResponse
 
 app.include_router(router)
+app.include_router(twilio_router)
 
 # ── Built-in Web UI ──────────────────────────────────────────
 @app.get("/")

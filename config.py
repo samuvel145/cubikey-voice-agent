@@ -22,6 +22,16 @@ class Settings(BaseSettings):
     CARTESIA_API_KEY: str = ""
     CARTESIA_VOICE_ID: str = "default"
 
+    # ── Twilio ────────────────────────────────────────────────
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+    TWILIO_PHONE_NUMBER: str = ""
+
+    # ── Deployment ────────────────────────────────────────────
+    # Full public-facing URL of this server (used to build the Twilio stream WS URL).
+    # Example: http://2.24.100.198:8001  or  https://your-domain.com
+    PUBLIC_URL: str = "http://localhost:8000"
+
     # ── Audio ─────────────────────────────────────────────────
     SAMPLE_RATE: int = 16000
     FRAME_DURATION_MS: int = 20
