@@ -103,9 +103,12 @@ async def main():
                         now = asyncio.get_event_loop().time()
 
                         if mic_state["agent_speaking"]:
-                            # Agent speaking: send real audio for barge-in detection.
-                            # Server handles STT muting on its side.
-                            await ws.send(data.tobytes())
+                            # Terminal mode: no echo cancellation — send silence while
+                            # agent TTS plays so the speaker echo cannot trigger false
+                            # barge-in.  Barge-in works correctly on Twilio (phone AEC)
+                            # and the browser client (WebRTC AEC).
+                            s = np.zeros(len(data), dtype='int16')
+                            await ws.send(s.tobytes())
                         elif now < mic_state["mute_until"]:
                             # Echo-settle window: send silence so server STT doesn't
                             # transcribe the dying speaker echo.
