@@ -75,18 +75,44 @@ async def main():
             )
             out_stream.start()
 
+            # ── Mic-mute state (shared between mic_sender & message_receiver) ──
+            # agent_speaking: True while TTS audio is playing
+            # mute_until:     monotonic time until which mic is silenced post-speech
+            mic_state = {"agent_speaking": False, "mute_until": 0.0}
+            ECHO_SETTLE_S = 0.6  # must match server ECHO_SETTLE_S
+
             async def mic_sender():
-                """Reads from mic and sends to server."""
+                """Reads from mic and sends to server.
+
+                While the agent is speaking (agent_speaking=True) we still send
+                real audio so the server can detect barge-in via VAD.  For the
+                brief echo-settle window after the agent stops (mute_until) we
+                send silence so the server STT doesn't transcribe speaker echo.
+                """
                 input_queue = asyncio.Queue()
                 loop = asyncio.get_event_loop()
                 def callback(indata, frames, time, status):
                     loop.call_soon_threadsafe(input_queue.put_nowait, indata.copy())
 
+                silence_frame = np.zeros((CHUNK_SIZE, CHANNELS), dtype='int16')
+
                 with sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS, dtype='int16', callback=callback):
                     print("🎙️  [Microphone Active] - Talk to the AI...")
                     while True:
                         data = await input_queue.get()
-                        await ws.send(data.tobytes())
+                        now = asyncio.get_event_loop().time()
+
+                        if mic_state["agent_speaking"]:
+                            # Agent speaking: send real audio for barge-in detection.
+                            # Server handles STT muting on its side.
+                            await ws.send(data.tobytes())
+                        elif now < mic_state["mute_until"]:
+                            # Echo-settle window: send silence so server STT doesn't
+                            # transcribe the dying speaker echo.
+                            s = np.zeros(len(data), dtype='int16')
+                            await ws.send(s.tobytes())
+                        else:
+                            await ws.send(data.tobytes())
 
             async def message_receiver():
                 """Receives and processes server messages."""
@@ -98,21 +124,42 @@ async def main():
                         else:
                             data = json.loads(message)
                             mtype = data.get("type")
-                            
+
                             if mtype == "ready":
                                 print("\n🤖 Agent: [Ready!] ")
+
+                            elif mtype == "agent_start":
+                                # Agent started speaking — mic still sends for barge-in
+                                mic_state["agent_speaking"] = True
+
+                            elif mtype == "agent_stop":
+                                # Agent finished — start echo-settle, then re-enable mic fully
+                                mic_state["agent_speaking"] = False
+                                mic_state["mute_until"] = (
+                                    asyncio.get_event_loop().time() + ECHO_SETTLE_S
+                                )
+
                             elif mtype == "transcript":
                                 print(f"\n📝 You: {data.get('text')}")
+
                             elif mtype == "interrupt":
                                 nonlocal pending_audio
+                                # Barge-in: stop playback and start echo-settle
+                                mic_state["agent_speaking"] = False
+                                mic_state["mute_until"] = (
+                                    asyncio.get_event_loop().time() + ECHO_SETTLE_S
+                                )
                                 print("\n⚡ [Interrupted]                             ", end="\r")
-                                # 1. Flush the queue
+                                # Flush audio output queue
                                 while not audio_out_queue.empty():
-                                    try: audio_out_queue.get_nowait()
-                                    except queue.Empty: break
-                                # 2. Clear the hardware-level pending buffer
-                                pending_audio.clear() 
+                                    try:
+                                        audio_out_queue.get_nowait()
+                                    except queue.Empty:
+                                        break
+                                # Clear hardware-level pending buffer
+                                pending_audio.clear()
                                 print("\n🎙️  Agent: [Stopped. Listening to you...]", end="\r")
+
                             elif mtype == "error":
                                 print(f"\n❌ Server Error: {data.get('message')}")
                 except Exception:

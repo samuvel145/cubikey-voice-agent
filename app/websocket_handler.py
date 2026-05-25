@@ -96,6 +96,12 @@ async def run_pipeline(
         session.last_vocal_start = asyncio.get_event_loop().time()
         stt.clear()  # discard any transcripts queued while agent was last speaking
 
+        # Notify client: agent is speaking — client will mute its mic
+        try:
+            await websocket.send_json({"type": "agent_start"})
+        except Exception:
+            pass
+
         if is_greeting:
             # ── Scripted greeting — direct TTS, no LLM call ───────
             # Gives instant playback with zero LLM latency.
@@ -145,6 +151,11 @@ async def run_pipeline(
         session.is_greeting = False
         session.last_vocal_start = None
         session.is_interrupted = False
+        # Notify client: agent stopped — client resumes mic after echo-settle delay
+        try:
+            await websocket.send_json({"type": "agent_stop"})
+        except Exception:
+            pass
 
 
 # ── WebSocket Endpoint ───────────────────────────────────────
@@ -183,6 +194,9 @@ async def voice_websocket(websocket: WebSocket) -> None:
         async def audio_loop() -> None:
             audio_buffer = bytearray()
             last_silence_send = 0.0  # monotonic time of last keep-alive silence frame
+            prev_agent_speaking = False
+            echo_settle_until = 0.0  # send silence to STT until this time after agent stops
+            ECHO_SETTLE_S = 0.6  # seconds to suppress mic after TTS ends (echo die-down)
 
             async for message in websocket.iter_bytes():
                 audio_buffer.extend(message)
@@ -215,23 +229,33 @@ async def voice_websocket(websocket: WebSocket) -> None:
                                 await stt.send_audio(frame)
                                 continue
 
+                    # ── Echo-settle transition detection ─────
+                    # When the agent JUST stopped speaking, suppress mic audio
+                    # sent to STT for ECHO_SETTLE_S seconds so the speaker echo
+                    # (TTS audio leaking into the microphone) has time to die out
+                    # before we start transcribing again.
+                    now = asyncio.get_event_loop().time()
+                    if prev_agent_speaking and not session.is_agent_speaking:
+                        echo_settle_until = now + ECHO_SETTLE_S
+                        stt.clear()  # drop echo transcripts queued during TTS playback
+                        logger.debug("Echo settle started (%.1fs)", ECHO_SETTLE_S)
+                    prev_agent_speaking = session.is_agent_speaking
+
                     # ── VAD → STT ────────────────────────────
                     result = vad.process_frame(frame)
 
                     if not session.is_agent_speaking:
-                        # Always push to Azure STT when agent is silent:
-                        # - Speech frames: carry actual voice data
-                        # - Silence/end_of_speech frames: continuous silence is required
-                        #   for Azure's internal VAD to detect utterance end and fire
-                        #   recognized_cb. A sparse 0.5s keepalive is not enough.
-                        if result == "speech":
+                        if now < echo_settle_until:
+                            # Echo-settle: push silence so Azure STT stays connected
+                            # but doesn't transcribe the speaker echo.
+                            await stt.send_audio(b"\x00" * settings.FRAME_SIZE)
+                        elif result == "speech":
                             await stt.send_audio(frame)
                         else:
                             await stt.send_audio(b"\x00" * settings.FRAME_SIZE)
                     else:
                         # Agent is speaking — send minimal keepalive to hold the Azure
                         # STT connection open without flooding it with silence.
-                        now = asyncio.get_event_loop().time()
                         if now - last_silence_send >= 0.5:
                             await stt.send_audio(b"\x00" * settings.FRAME_SIZE)
                             last_silence_send = now
