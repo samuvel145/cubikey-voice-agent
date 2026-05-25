@@ -151,14 +151,17 @@ async def root_ui():
                             status.innerText = `You said: "${msg.text}"`;
                         } else if (msg.type === 'interrupt') {
                             status.innerText = "Listening...";
-                            // Flush any buffered agent audio still scheduled to play.
-                            // Closing and recreating the AudioContext is the only reliable
-                            // way to stop Web Audio API's internal playback queue immediately.
+                            // Flush buffered agent audio by closing + recreating AudioContext.
+                            // IMPORTANT: startMicrophone() must be called after the reset —
+                            // old.close() destroys the ScriptProcessor node that sends mic
+                            // audio over the WebSocket, so without the restart the browser
+                            // goes silent and the agent never receives audio again.
                             if (audioContext) {
                                 const old = audioContext;
                                 audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
                                 nextPlayTime = 0;
                                 old.close().catch(() => {});
+                                startMicrophone(); // rewire mic → new AudioContext
                             }
                         }
                     } else if (event.data instanceof ArrayBuffer) {
