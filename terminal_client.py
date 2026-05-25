@@ -76,10 +76,18 @@ async def main():
             out_stream.start()
 
             # ── Mic-mute state (shared between mic_sender & message_receiver) ──
-            # agent_speaking: True while TTS audio is playing
-            # mute_until:     monotonic time until which mic is silenced post-speech
+            # agent_speaking:  True while server is sending TTS audio
+            # mute_until:      monotonic time until which mic sends silence
+            # playback_est_end: estimated time when client will finish playing queued audio
+            #
+            # WHY playback_est_end matters:
+            # agent_stop is sent by the server when it finishes SENDING audio chunks,
+            # not when the CLIENT finishes PLAYING them. The playback queue may hold
+            # several seconds of audio still to be played. We must keep the mic muted
+            # until that audio has actually played out, then add a short echo-settle.
             mic_state = {"agent_speaking": False, "mute_until": 0.0}
-            ECHO_SETTLE_S = 0.6  # must match server ECHO_SETTLE_S
+            playback_est_end = [0.0]  # list so inner closures can mutate it
+            ECHO_SETTLE_S = 0.8
 
             async def mic_sender():
                 """Reads from mic and sends to server.
@@ -124,6 +132,14 @@ async def main():
                         if isinstance(message, bytes):
                             audio_chunk = np.frombuffer(message, dtype='int16')
                             audio_out_queue.put(audio_chunk)
+                            # Track when this audio will finish playing so we can
+                            # keep the mic muted until the speakers actually go quiet.
+                            now = asyncio.get_event_loop().time()
+                            duration = len(audio_chunk) / SAMPLE_RATE
+                            if now >= playback_est_end[0]:
+                                playback_est_end[0] = now + duration
+                            else:
+                                playback_est_end[0] += duration
                         else:
                             data = json.loads(message)
                             mtype = data.get("type")
@@ -132,34 +148,39 @@ async def main():
                                 print("\n🤖 Agent: [Ready!] ")
 
                             elif mtype == "agent_start":
-                                # Agent started speaking — mic still sends for barge-in
+                                # Agent starting — reset playback tracker for this turn
                                 mic_state["agent_speaking"] = True
+                                playback_est_end[0] = 0.0
 
                             elif mtype == "agent_stop":
-                                # Agent finished — start echo-settle, then re-enable mic fully
+                                # Agent done SENDING. Keep mic muted until:
+                                #   • the playback buffer has finished playing  (playback_est_end)
+                                #   • plus a short room-echo settle window      (ECHO_SETTLE_S)
                                 mic_state["agent_speaking"] = False
-                                mic_state["mute_until"] = (
-                                    asyncio.get_event_loop().time() + ECHO_SETTLE_S
-                                )
+                                settle_target = max(
+                                    playback_est_end[0],
+                                    asyncio.get_event_loop().time(),
+                                ) + ECHO_SETTLE_S
+                                mic_state["mute_until"] = settle_target
+                                playback_est_end[0] = 0.0
 
                             elif mtype == "transcript":
                                 print(f"\n📝 You: {data.get('text')}")
 
                             elif mtype == "interrupt":
                                 nonlocal pending_audio
-                                # Barge-in: stop playback and start echo-settle
+                                # Barge-in: playback stops immediately, short settle
                                 mic_state["agent_speaking"] = False
+                                playback_est_end[0] = 0.0
                                 mic_state["mute_until"] = (
                                     asyncio.get_event_loop().time() + ECHO_SETTLE_S
                                 )
                                 print("\n⚡ [Interrupted]                             ", end="\r")
-                                # Flush audio output queue
                                 while not audio_out_queue.empty():
                                     try:
                                         audio_out_queue.get_nowait()
                                     except queue.Empty:
                                         break
-                                # Clear hardware-level pending buffer
                                 pending_audio.clear()
                                 print("\n🎙️  Agent: [Stopped. Listening to you...]", end="\r")
 

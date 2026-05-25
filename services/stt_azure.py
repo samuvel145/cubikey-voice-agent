@@ -28,6 +28,11 @@ class AzureSTTService:
             region=settings.AZURE_SPEECH_REGION
         )
         self._speech_config.speech_recognition_language = "en-US"
+        # Wait 1.5s of silence before declaring end of utterance.
+        # Prevents premature firing when the user pauses between sentences.
+        self._speech_config.set_property(
+            speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "1500"
+        )
         self._stream = None
         self._audio_config = None
         self._speech_recognizer = None

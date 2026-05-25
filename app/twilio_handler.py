@@ -57,10 +57,7 @@ router = APIRouter()
 TWILIO_GREETING = (
     "Hello, thank you for calling Cubikey. "
     "This is Maya, your AI assistant. "
-    "We help businesses with digital growth, AI-powered marketing, "
-    "Answer Engine Optimization, paid advertising, social media, websites, "
-    "dashboards and analytics, AI automations, and enterprise ABM solutions. "
-    "How may I assist you today?"
+    "How can I help you today?"
 )
 
 ACKNOWLEDGMENTS = ["Sure.", "Got it.", "Okay.", "Alright.", "Mm-hmm."]
