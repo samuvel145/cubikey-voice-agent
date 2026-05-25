@@ -8,8 +8,18 @@ import numpy as np
 import sounddevice as sd
 import websockets
 
-# Configuration
-WS_URL = "ws://127.0.0.1:8000/ws/voice"
+# Configuration — read PORT from .env so it stays in sync with run.py
+def _read_port() -> int:
+    try:
+        with open(".env") as f:
+            for line in f:
+                if line.strip().startswith("PORT="):
+                    return int(line.strip().split("=", 1)[1])
+    except Exception:
+        pass
+    return 8000
+
+WS_URL = f"ws://127.0.0.1:{_read_port()}/ws/voice"
 CHANNELS = 1
 SAMPLE_RATE = 16000
 CHUNK_SIZE = 1024  # Size of each microphone read
